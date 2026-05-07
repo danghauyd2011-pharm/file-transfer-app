@@ -1,0 +1,64 @@
+name: 🧹 Auto Cleanup
+
+on:
+  schedule:
+    # Chạy mỗi 5 phút (giới hạn thấp nhất GitHub cho phép)
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Cần full history để đọc commit date
+
+      - name: Delete files older than 5 minutes (by Git commit date)
+        id: cleanup
+        run: |
+          mkdir -p uploads
+          COUNT=0
+          NOW=$(date +%s)
+          LIMIT=300  # 5 phút = 300 giây
+
+          for f in uploads/*; do
+            # Bỏ qua nếu không phải file thường
+            [ -f "$f" ] || continue
+            [ "$(basename $f)" = ".gitkeep" ] && continue
+
+            # Lấy thời gian commit gần nhất của file này từ Git log
+            COMMIT_DATE=$(git log -1 --format="%ct" -- "$f" 2>/dev/null)
+
+            # Nếu không có commit date thì bỏ qua
+            [ -z "$COMMIT_DATE" ] && continue
+
+            AGE=$((NOW - COMMIT_DATE))
+            echo "📄 $f | tuổi: ${AGE}s | giới hạn: ${LIMIT}s"
+
+            if [ "$AGE" -gt "$LIMIT" ]; then
+              echo "🗑 Xóa: $f (${AGE}s tuổi)"
+              rm -f "$f"
+              COUNT=$((COUNT + 1))
+            fi
+          done
+
+          echo "deleted=$COUNT" >> $GITHUB_OUTPUT
+          echo "✅ Đã xóa: $COUNT files"
+
+      - name: Commit changes
+        run: |
+          git config user.name  "FileZap Bot"
+          git config user.email "bot@filezap.app"
+          git add uploads/
+          DELETED="${{ steps.cleanup.outputs.deleted }}"
+          if git diff --staged --quiet; then
+            echo "Không có file nào cần xóa"
+          else
+            git commit -m "🧹 cleanup: xóa $DELETED files cũ hơn 5 phút"
+            git push
+          fi
