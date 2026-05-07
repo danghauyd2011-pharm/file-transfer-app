@@ -1,0 +1,77 @@
+name: 📥 Handle Upload
+
+on:
+  issues:
+    types: [opened]
+
+# Chỉ chạy nếu title bắt đầu bằng "upload-"
+# Bảo vệ: không xử lý issue thông thường
+
+jobs:
+  upload:
+    # Guard: bỏ qua issue không phải upload
+    if: startsWith(github.event.issue.title, 'upload-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Validate & Save file
+        id: save
+        run: |
+          set -e
+          mkdir -p uploads
+
+          # Lấy tên file từ title (an toàn: strip ký tự nguy hiểm)
+          RAW_NAME="${{ github.event.issue.title }}"
+          FILE_NAME=$(echo "$RAW_NAME" | sed 's/^upload-//' | sed 's/[^a-zA-Z0-9._() -]/_/g')
+
+          echo "Saving: $FILE_NAME"
+
+          # Decode base64 nội dung
+          CONTENT="${{ github.event.issue.body }}"
+          echo "$CONTENT" | base64 -d > "uploads/$FILE_NAME"
+
+          # Kiểm tra file không rỗng
+          SIZE=$(stat -c%s "uploads/$FILE_NAME" 2>/dev/null || echo 0)
+          if [ "$SIZE" -eq 0 ]; then
+            echo "ERROR: File rỗng, bỏ qua"
+            exit 1
+          fi
+
+          echo "filename=$FILE_NAME" >> $GITHUB_OUTPUT
+          echo "filesize=$SIZE" >> $GITHUB_OUTPUT
+
+      - name: Commit file
+        run: |
+          git config user.name  "FileZap Bot"
+          git config user.email "bot@filezap.app"
+          git add uploads/
+          git diff --staged --quiet || git commit -m "📁 upload: ${{ steps.save.outputs.filename }} (${{ steps.save.outputs.filesize }} bytes)"
+          git push
+
+      - name: Comment & close issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fn   = '${{ steps.save.outputs.filename }}';
+            const size = '${{ steps.save.outputs.filesize }}';
+            const url  = `https://raw.githubusercontent.com/${{ github.repository }}/main/uploads/${encodeURIComponent(fn)}`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+              body: `✅ **Upload thành công!**\n\n📄 File: \`${fn}\`\n📦 Size: ${size} bytes\n🔗 Link: ${url}\n\n*File sẽ tự xóa sau 5 ngày.*`
+            });
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed'
+            });

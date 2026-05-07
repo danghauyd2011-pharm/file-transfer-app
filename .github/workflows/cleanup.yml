@@ -1,0 +1,47 @@
+name: 🧹 Auto Cleanup
+
+on:
+  schedule:
+    # Chạy lúc 2:00 AM UTC mỗi ngày
+    - cron: "0 2 * * *"
+  # Cho phép chạy thủ công
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Delete files older than 5 days
+        id: cleanup
+        run: |
+          mkdir -p uploads
+          COUNT=0
+
+          # Tìm và xóa file cũ hơn 5 ngày
+          while IFS= read -r -d '' f; do
+            echo "🗑 Xóa: $f"
+            rm -f "$f"
+            COUNT=$((COUNT + 1))
+          done < <(find uploads -type f -mtime +5 -print0 2>/dev/null)
+
+          echo "deleted=$COUNT" >> $GITHUB_OUTPUT
+          echo "Đã xóa: $COUNT files"
+
+      - name: Commit changes
+        run: |
+          git config user.name  "FileZap Bot"
+          git config user.email "bot@filezap.app"
+          git add uploads/
+          DELETED="${{ steps.cleanup.outputs.deleted }}"
+          if git diff --staged --quiet; then
+            echo "Không có gì để xóa"
+          else
+            git commit -m "🧹 cleanup: xóa $DELETED files cũ hơn 5 ngày"
+            git push
+          fi
